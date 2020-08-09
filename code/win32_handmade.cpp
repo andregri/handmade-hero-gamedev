@@ -8,7 +8,62 @@
 
 #include <Windows.h>
 
-LRESULT CALLBACK MainWindowCallback(
+#define internal static  		// internal function: can be called only in the file where it is defined.
+#define local_persist static   	// allocated until the program runs in the scope and keep its value.
+#define global_variable static  // static global variable is only visible in the file where it is initialized and is automatically initialized to zero.
+
+// TODO(andrea) this is a global for now.
+global_variable bool Running;
+global_variable BITMAPINFO BitMapInfo;
+global_variable void *BitmapMemory;
+global_variable HBITMAP BitmapHandle;
+global_variable HDC BitmapDeviceContext;
+
+internal void Win32ResizeDIBSection(int Width, int Height)
+{
+	// TODO(andre): Bulletproof this.
+	// Maybe don't free first, free after, then free first if that fails.
+
+	if(BitmapHandle)
+	{
+		DeleteObject(BitmapHandle);  // Delete a bitmap.
+	}
+	
+	if(!BitmapDeviceContext)
+	{
+		// TODO(andre): Should we recreate these under certain special circumstances?
+		BitmapDeviceContext = CreateCompatibleDC(0);
+	}
+	
+	BitMapInfo.bmiHeader.biSize = sizeof(BitMapInfo.bmiHeader);
+	BitMapInfo.bmiHeader.biWidth = Width;
+	BitMapInfo.bmiHeader.biHeight = Height;
+	BitMapInfo.bmiHeader.biPlanes = 1;
+	BitMapInfo.bmiHeader.biBitCount = 32;
+	BitMapInfo.bmiHeader.biCompression = BI_RGB;
+
+	// TODO(andre): maybe we can just allocate this ourselves?
+	
+	BitmapHandle = CreateDIBSection(
+		BitmapDeviceContext, &BitMapInfo,
+		DIB_RGB_COLORS,
+		&BitmapMemory,
+		0, 0);
+}
+
+internal void Win32UpdateWindow(HDC DeviceContext, int X, int Y, int Width, int Height)
+{
+	// rectangle to rectangle copy
+	StretchDIBits(
+		DeviceContext,
+		X, Y, Width, Height,
+		X, Y, Width, Height,
+		BitmapMemory,
+		&BitMapInfo,
+		DIB_RGB_COLORS, SRCCOPY);  
+}
+
+LRESULT CALLBACK Win32MainWindowCallback(
 	HWND	Window,
 	UINT	Message,
 	WPARAM 	WParam,
@@ -20,16 +75,25 @@ LRESULT CALLBACK MainWindowCallback(
 	{
 		case WM_SIZE:
 		{
+			RECT ClientRect;
+			GetClientRect(Window, &ClientRect);  // get the part of the window where you can actually draw, for instance not the borders.
+			int Height = ClientRect.bottom - ClientRect.top;
+			int Width = ClientRect.right - ClientRect.left;
+			Win32ResizeDIBSection(Width, Height);
 			OutputDebugStringA("WM_SIZE\n");
 		} break;
 
 		case WM_DESTROY:
 		{
+			// TODO(andrea): handle this as an error - recreate window?
+			Running = false;
 			OutputDebugStringA("WM_DESTROY\n");
 		} break;
 
 		case WM_CLOSE:
 		{
+			// TODO(andre): handle this with a message to the user?
+			Running = false;
 			OutputDebugStringA("WM_CLOSE\n");
 		} break;
 
@@ -46,7 +110,8 @@ LRESULT CALLBACK MainWindowCallback(
 			int Y = Paint.rcPaint.top;
 			int Height = Paint.rcPaint.bottom - Paint.rcPaint.top;
 			int Width = Paint.rcPaint.right - Paint.rcPaint.left;
-			static DWORD Operation = WHITENESS;
+			Win32UpdateWindow(DeviceContext, X, Y, Width, Height);
+			local_persist DWORD Operation = WHITENESS;
 			PatBlt(DeviceContext, X, Y, Width, Height, Operation);
 			if(Operation == WHITENESS)
 			{
@@ -77,15 +142,14 @@ INT WinMain(
 {
 	WNDCLASS WindowClass = {};
 	WindowClass.style = CS_OWNDC|CS_HREDRAW|CS_VREDRAW;
-	WindowClass.lpfnWndProc = MainWindowCallback; // Window Procedure
+	WindowClass.lpfnWndProc = Win32MainWindowCallback; // Window Procedure
 	WindowClass.hInstance = Instance;
-	//WindowClass.hIcon;
 	WindowClass.lpszClassName = "HandmadHeroWindowClass";
 
 	if(RegisterClassA(&WindowClass))
 	{
 		HWND WindowHandle = CreateWindowExA(
-			0, 
+			0,
 			WindowClass.lpszClassName, 
 			"Handmade Hero", 
 			WS_OVERLAPPEDWINDOW|WS_VISIBLE, 
@@ -99,9 +163,10 @@ INT WinMain(
 			0);
 		if(WindowHandle)
 		{
-			MSG Message;
-			for(;;)
+			Running = true;
+			while(Running)
 			{
+				MSG Message;
 				BOOL MessageResult = GetMessageA(&Message, 0, 0, 0);
 				if(MessageResult > 0)
 				{
@@ -113,7 +178,6 @@ INT WinMain(
 					break;
 				}
 			}
-			
 		}
 		else
 		{
